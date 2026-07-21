@@ -302,6 +302,19 @@ func (s *Service) createWebServer() error {
 	// register open api
 	open.RegisterOpenAPI(strategyHandler, server)
 
+	// health check endpoint for MCP gateway debugging
+	server.RegisterAPI(&hanet.ResetAPI{
+		Method: hanet.HttpMethodGet,
+		Path:   "/api/admin/health/",
+		Handler: func(c *gin.Context) {
+			c.JSON(200, gin.H{
+				"status":  "ok",
+				"service": "dbha-admin",
+				"time":    time.Now().Local().Format(time.RFC3339),
+			})
+		},
+	})
+
 	// add swagger api
 	server.SetSwaggerFileRoute(config.Cfg.DocFileDir + "/swagger.json")
 	hd := v5emb.NewHandlerWithConfig(swgui.Config{
