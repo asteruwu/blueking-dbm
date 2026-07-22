@@ -27,7 +27,6 @@ package admin
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"os/exec"
 	"strings"
@@ -319,44 +318,39 @@ func (s *Service) createWebServer() error {
 	})
 
 	// process status endpoint for MCP gateway debugging
-	// runs `ps` to check dbha-admin process liveness and returns structured result
+	// runs `ps ax` and filters in Go to check dbha-admin process liveness
 	server.RegisterAPI(&hanet.ResetAPI{
 		Method: hanet.HttpMethodGet,
 		Path:   "/api/admin/process/",
 		Handler: func(c *gin.Context) {
 			procName := "dbha-admin"
-			// ps -e -o pid,comm,args then grep the process name
-			cmd := exec.Command("sh", "-c",
-				fmt.Sprintf("ps -e -o pid=,comm=,args= | grep '%s' | grep -v 'grep'", procName))
+			cmd := exec.Command("ps", "ax", "-o", "pid=", "-o", "comm=", "-o", "args=")
 			output, err := cmd.CombinedOutput()
 
 			type procInfo struct {
-				PID    string `json:"pid"`
-				Comm   string `json:"comm"`
-				Args   string `json:"args"`
+				PID  string `json:"pid"`
+				Comm string `json:"comm"`
+				Args string `json:"args"`
 			}
 
 			result := gin.H{
-				"service":   "dbha-admin",
-				"time":      time.Now().Local().Format(time.RFC3339),
-				"check_cmd": "ps -e -o pid,comm,args | grep dbha-admin",
+				"service": "dbha-admin",
+				"time":    time.Now().Local().Format(time.RFC3339),
 			}
 
-			if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+			if err != nil {
 				result["alive"] = false
 				result["status"] = "down"
 				result["processes"] = []procInfo{}
-				if err != nil {
-					result["error"] = strings.TrimSpace(err.Error())
-				}
+				result["error"] = strings.TrimSpace(err.Error())
 				c.JSON(200, result)
 				return
 			}
 
 			procs := []procInfo{}
-			for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			for _, line := range strings.Split(string(output), "\n") {
 				line = strings.TrimSpace(line)
-				if line == "" {
+				if line == "" || !strings.Contains(line, procName) {
 					continue
 				}
 				fields := strings.SplitN(line, " ", 3)
@@ -371,7 +365,11 @@ func (s *Service) createWebServer() error {
 			}
 
 			result["alive"] = len(procs) > 0
-			result["status"] = "up"
+			if len(procs) > 0 {
+				result["status"] = "up"
+			} else {
+				result["status"] = "down"
+			}
 			result["process_count"] = len(procs)
 			result["processes"] = procs
 			c.JSON(200, result)
