@@ -27,7 +27,10 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -312,6 +315,66 @@ func (s *Service) createWebServer() error {
 				"service": "dbha-admin",
 				"time":    time.Now().Local().Format(time.RFC3339),
 			})
+		},
+	})
+
+	// process status endpoint for MCP gateway debugging
+	// runs `ps` to check dbha-admin process liveness and returns structured result
+	server.RegisterAPI(&hanet.ResetAPI{
+		Method: hanet.HttpMethodGet,
+		Path:   "/api/admin/process/",
+		Handler: func(c *gin.Context) {
+			procName := "dbha-admin"
+			// ps -e -o pid,comm,args then grep the process name
+			cmd := exec.Command("sh", "-c",
+				fmt.Sprintf("ps -e -o pid=,comm=,args= | grep '%s' | grep -v 'grep'", procName))
+			output, err := cmd.CombinedOutput()
+
+			type procInfo struct {
+				PID    string `json:"pid"`
+				Comm   string `json:"comm"`
+				Args   string `json:"args"`
+			}
+
+			result := gin.H{
+				"service":   "dbha-admin",
+				"time":      time.Now().Local().Format(time.RFC3339),
+				"check_cmd": "ps -e -o pid,comm,args | grep dbha-admin",
+			}
+
+			if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+				result["alive"] = false
+				result["status"] = "down"
+				result["processes"] = []procInfo{}
+				if err != nil {
+					result["error"] = strings.TrimSpace(err.Error())
+				}
+				c.JSON(200, result)
+				return
+			}
+
+			procs := []procInfo{}
+			for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				fields := strings.SplitN(line, " ", 3)
+				pi := procInfo{PID: fields[0]}
+				if len(fields) > 1 {
+					pi.Comm = fields[1]
+				}
+				if len(fields) > 2 {
+					pi.Args = fields[2]
+				}
+				procs = append(procs, pi)
+			}
+
+			result["alive"] = len(procs) > 0
+			result["status"] = "up"
+			result["process_count"] = len(procs)
+			result["processes"] = procs
+			c.JSON(200, result)
 		},
 	})
 
